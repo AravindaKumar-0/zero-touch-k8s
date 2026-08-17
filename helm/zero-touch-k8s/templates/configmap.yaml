@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "zero-touch-k8s.fullname" . }}-config
+  labels:
+    {{- include "zero-touch-k8s.labels" . | nindent 4 }}
+
+data:
+  APP_ENV: {{ .Values.config.appEnv | quote }}
+  BACKEND_URL: {{ .Values.config.backendUrl | quote }}

@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "zero-touch-k8s.fullname" . }}-backend
+  labels:
+    app: backend
+    {{- include "zero-touch-k8s.labels" . | nindent 4 }}
+
+spec:
+  replicas: {{ .Values.backend.replicaCount }}
+
+  selector:
+    matchLabels:
+      app: backend
+
+  template:
+    metadata:
+      labels:
+        app: backend
+        {{- include "zero-touch-k8s.selectorLabels" . | nindent 8 }}
+
+    spec:
+      containers:
+        - name: backend
+          image: "{{ .Values.backend.image.repository }}:{{ .Values.backend.image.tag }}"
+          imagePullPolicy: {{ .Values.backend.image.pullPolicy }}
+
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          envFrom:
+            - configMapRef:
+                name: {{ include "zero-touch-k8s.fullname" . }}-config
+            - secretRef:
+                name: {{ include "zero-touch-k8s.fullname" . }}-secret
+
+          resources:
+            {{- toYaml .Values.backend.resources | nindent 12 }}
+
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.backend.probes.readiness.path }}
+              port: {{ .Values.backend.probes.readiness.port }}
+            initialDelaySeconds: {{ .Values.backend.probes.readiness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.readiness.periodSeconds }}
+
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.backend.probes.liveness.path }}
+              port: {{ .Values.backend.probes.liveness.port }}
+            initialDelaySeconds: {{ .Values.backend.probes.liveness.initialDelaySeconds }}
+            periodSeconds: {{ .Values.backend.probes.liveness.periodSeconds }}
+
+          volumeMounts:
+            - name: backend-data
+              mountPath: /data
+
+      volumes:
+        - name: backend-data
+          persistentVolumeClaim:
+            claimName: {{ include "zero-touch-k8s.fullname" . }}-data

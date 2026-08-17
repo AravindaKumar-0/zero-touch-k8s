@@ -1,0 +1,94 @@
+backend:
+  replicaCount: 2
+
+  image:
+    repository: imaravinda/zero-touch-backend
+    tag: v1
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 8080
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 64Mi
+    limits:
+      cpu: 500m
+      memory: 128Mi
+
+  probes:
+    readiness:
+      path: /health
+      port: 8080
+      initialDelaySeconds: 5
+      periodSeconds: 10
+
+    liveness:
+      path: /health
+      port: 8080
+      initialDelaySeconds: 10
+      periodSeconds: 20
+
+
+frontend:
+  replicaCount: 2
+
+  image:
+    repository: imaravinda/zero-touch-frontend
+    tag: v1
+    pullPolicy: IfNotPresent
+
+  service:
+    type: ClusterIP
+    port: 80
+    targetPort: 80
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+
+  probes:
+    readiness:
+      path: /
+      port: 80
+      initialDelaySeconds: 5
+      periodSeconds: 10
+
+    liveness:
+      path: /
+      port: 80
+      initialDelaySeconds: 10
+      periodSeconds: 20
+
+
+config:
+  appEnv: production
+  backendUrl: http://backend-service
+
+
+secret:
+  dbUsername: ""
+  dbPassword: ""
+
+
+storage:
+  enabled: true
+  size: 1Gi
+  accessMode: ReadWriteOnce
+  storageClass: local-path
+
+
+ingress:
+  enabled: true
+  className: traefik
+
+  paths:
+    frontend: /
+    backend: /api
