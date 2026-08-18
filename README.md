@@ -7,6 +7,9 @@ health checks.
 
 ## Architecture
 
+<img width="1265" height="833" alt="k8s-architecture" src="https://github.com/user-attachments/assets/c13e4a3d-96c3-4930-aaad-68f114c10058" />
+
+
 ```
 GitHub Repo (source + Dockerfiles + Helm chart)
         │  (manual/webhook trigger)
