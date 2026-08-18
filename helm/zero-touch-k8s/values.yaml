@@ -3,7 +3,7 @@ backend:
 
   image:
     repository: imaravinda/zero-touch-backend
-    tag: v1
+    tag: ""
     pullPolicy: IfNotPresent
 
   service:
@@ -38,7 +38,7 @@ frontend:
 
   image:
     repository: imaravinda/zero-touch-frontend
-    tag: v1
+    tag: ""
     pullPolicy: IfNotPresent
 
   service:
