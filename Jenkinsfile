@@ -164,17 +164,22 @@ pipeline {
                         variable: 'KUBECONFIG'
                     )
                 ]) {
-                    sh '''
-                        set -e
-
-                        kubectl rollout status \
-                            deployment/zero-touch-zero-touch-k8s-backend \
-                            --timeout=5m
-
-                        kubectl rollout status \
-                            deployment/zero-touch-zero-touch-k8s-frontend \
-                            --timeout=5m
-                    '''
+                    script {
+                        try {
+                            sh '''
+                                set -e
+                                kubectl rollout status deployment/zero-touch-zero-touch-k8s-backend --timeout=5m
+                                kubectl rollout status deployment/zero-touch-zero-touch-k8s-frontend --timeout=5m
+                            '''
+                        } catch (err) {
+                            echo "Rollout failed — rolling back to previous release"
+                            sh '''
+                                kubectl rollout undo deployment/zero-touch-zero-touch-k8s-backend
+                                kubectl rollout undo deployment/zero-touch-zero-touch-k8s-frontend
+                            '''
+                            error("Deployment failed and was rolled back to the last known-good release")
+                        }
+                    }
                 }
             }
         }
