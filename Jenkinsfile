@@ -2,14 +2,21 @@ pipeline {
     agent any
 
     environment {
-        DOCKERHUB_CREDENTIALS = credentials('dockerhub-creds')      
-        KUBECONFIG_CRED       = credentials('kubeconfig-cred')      
-        DOCKERHUB_USER        = '<your-dockerhub-username>'
-        FRONTEND_IMAGE        = "${DOCKERHUB_USER}/frontend"
-        BACKEND_IMAGE         = "${DOCKERHUB_USER}/backend"
-        HELM_RELEASE          = 'app-release'
-        HELM_CHART_PATH       = './helm/app-chart'
-        BACKEND_HEALTH_URL    = 'http://<backend-service-or-ingress>/health'
+        DOCKERHUB_CREDENTIALS = credentials('dockerhub-creds')
+        DOCKERHUB_USER = 'imaravinda'
+
+        FRONTEND_IMAGE = 'imaravinda/zero-touch-frontend'
+        BACKEND_IMAGE = 'imaravinda/zero-touch-backend'
+
+        KUBECONFIG_CRED = 'kubeconfig-cred'
+
+        HELM_RELEASE = 'zero-touch'
+        HELM_CHART_PATH = './helm/zero-touch-k8s'
+
+        IMAGE_TAG = "jenkins-${BUILD_NUMBER}"
+
+        BACKEND_SERVICE = 'zero-touch-zero-touch-k8s-backend'
+        BACKEND_API_PATH = '/api'
     }
 
     stages {
@@ -17,72 +24,206 @@ pipeline {
         stage('Checkout') {
             steps {
                 checkout scm
+
+                sh '''
+                    set -e
+                    pwd
+                    ls -la
+                    git rev-parse --short HEAD
+                '''
             }
         }
 
         stage('Build Docker Images') {
             steps {
-                script {
-                    sh "docker build -t ${FRONTEND_IMAGE}:${BUILD_NUMBER} ./frontend"
-                    sh "docker build -t ${BACKEND_IMAGE}:${BUILD_NUMBER} ./backend"
-                }
+                sh '''
+                    set -e
+
+                    docker build \
+                        -t "${FRONTEND_IMAGE}:${IMAGE_TAG}" \
+                        ./frontend
+
+                    docker build \
+                        -t "${BACKEND_IMAGE}:${IMAGE_TAG}" \
+                        ./backend
+
+                    docker images | grep zero-touch || true
+                '''
             }
         }
 
-        stage('Push to Docker Hub') {
+        stage('Push Images to Docker Hub') {
             steps {
-                script {
-                    sh "echo ${DOCKERHUB_CREDENTIALS_PSW} | docker login -u ${DOCKERHUB_CREDENTIALS_USR} --password-stdin"
-                    sh "docker push ${FRONTEND_IMAGE}:${BUILD_NUMBER}"
-                    sh "docker push ${BACKEND_IMAGE}:${BUILD_NUMBER}"
+                sh '''
+                    set -e
+
+                    echo "${DOCKERHUB_CREDENTIALS_PSW}" | \
+                    docker login \
+                        -u "${DOCKERHUB_CREDENTIALS_USR}" \
+                        --password-stdin
+
+                    docker push "${FRONTEND_IMAGE}:${IMAGE_TAG}"
+                    docker push "${BACKEND_IMAGE}:${IMAGE_TAG}"
+
+                    docker logout
+                '''
+            }
+        }
+
+        stage('Kubernetes Context Check') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        kubectl config current-context
+                        kubectl get nodes
+                        kubectl get pods
+                    '''
                 }
             }
         }
 
         stage('Deploy via Helm') {
             steps {
-                withCredentials([file(credentialsId: 'kubeconfig-cred', variable: 'KUBECONFIG')]) {
-                    sh """
-                        helm upgrade --install ${HELM_RELEASE} ${HELM_CHART_PATH} \
-                          --set frontend.image.repository=${FRONTEND_IMAGE} \
-                          --set frontend.image.tag=${BUILD_NUMBER} \
-                          --set backend.image.repository=${BACKEND_IMAGE} \
-                          --set backend.image.tag=${BUILD_NUMBER}
-                    """
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        helm upgrade --install \
+                            "${HELM_RELEASE}" \
+                            "${HELM_CHART_PATH}" \
+                            --set frontend.image.repository="${FRONTEND_IMAGE}" \
+                            --set frontend.image.tag="${IMAGE_TAG}" \
+                            --set backend.image.repository="${BACKEND_IMAGE}" \
+                            --set backend.image.tag="${IMAGE_TAG}"
+
+                        helm status "${HELM_RELEASE}"
+                    '''
+                }
+            }
+        }
+
+        stage('Verify Pods') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        kubectl get pods -o wide
+
+                        if kubectl get pods | grep -E \
+                            'CrashLoopBackOff|ImagePullBackOff|ErrImagePull|Error'; then
+                            exit 1
+                        fi
+                    '''
+                }
+            }
+        }
+
+        stage('Verify Services') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        kubectl get svc
+                        kubectl get svc "${BACKEND_SERVICE}"
+                        kubectl get endpoints
+                        kubectl get ingress
+                    '''
                 }
             }
         }
 
         stage('Verify Rollout') {
             steps {
-                withCredentials([file(credentialsId: 'kubeconfig-cred', variable: 'KUBECONFIG')]) {
-                    script {
-                        try {
-                            sh "kubectl rollout status deployment/backend --timeout=60s"
-                            sh "kubectl rollout status deployment/frontend --timeout=60s"
-                        } catch (err) {
-                            echo "Rollout failed — rolling back to previous release"
-                            sh "kubectl rollout undo deployment/backend"
-                            sh "kubectl rollout undo deployment/frontend"
-                            error("Deployment failed and was rolled back to the last known-good release")
-                        }
-                    }
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        kubectl rollout status \
+                            deployment/zero-touch-zero-touch-k8s-backend \
+                            --timeout=5m
+
+                        kubectl rollout status \
+                            deployment/zero-touch-zero-touch-k8s-frontend \
+                            --timeout=5m
+                    '''
                 }
             }
         }
 
-        stage('Post-deploy Health Check') {
+        stage('Backend Health Check') {
             steps {
-                script {
-                    def response = sh(
-                        script: "curl -s -o /dev/null -w '%{http_code}' ${BACKEND_HEALTH_URL}",
-                        returnStdout: true
-                    ).trim()
-                    if (response != '200') {
-                        error("Health check failed with status ${response}")
-                    } else {
-                        echo "Health check passed (200 OK)"
-                    }
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        kubectl run zero-touch-healthcheck \
+                            --image=curlimages/curl:8.10.1 \
+                            --restart=Never \
+                            --rm \
+                            -i \
+                            --attach \
+                            -- \
+                            curl -fsS \
+                            "http://${BACKEND_SERVICE}:80${BACKEND_API_PATH}"
+                    '''
+                }
+            }
+        }
+
+        stage('Final Verification') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: "${KUBECONFIG_CRED}",
+                        variable: 'KUBECONFIG'
+                    )
+                ]) {
+                    sh '''
+                        set -e
+
+                        kubectl get pods -o wide
+                        kubectl get svc
+                        kubectl get endpoints
+                        kubectl get ingress
+                        helm status "${HELM_RELEASE}"
+
+                        echo "Build: ${BUILD_NUMBER}"
+                        echo "Image: ${IMAGE_TAG}"
+                    '''
                 }
             }
         }
@@ -90,10 +231,15 @@ pipeline {
 
     post {
         success {
-            echo "Pipeline completed successfully — build #${BUILD_NUMBER} deployed and healthy."
+            echo "Build #${BUILD_NUMBER} deployed successfully."
         }
+
         failure {
-            echo "Pipeline failed — check rollout/health check logs above."
+            echo "Build #${BUILD_NUMBER} failed."
+        }
+
+        always {
+            echo "Pipeline execution finished."
         }
     }
 }
