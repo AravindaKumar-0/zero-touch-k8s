@@ -9,63 +9,61 @@ health checks.
 
 <img width="1265" height="833" alt="k8s-architecture" src="https://github.com/user-attachments/assets/c13e4a3d-96c3-4930-aaad-68f114c10058" />
 
-
-```
 GitHub Repo (source + Dockerfiles + Helm chart)
-        │  (manual/webhook trigger)
-        ▼
-   Jenkins Pipeline
-        │
-        ├─ Checkout source
-        ├─ Build Docker images (frontend, backend)
-        ├─ Tag images with Jenkins BUILD_NUMBER
-        ├─ Push images to Docker Hub
-        ├─ helm upgrade --install (kubeconfig credential)
-        ├─ Verify rollout status (kubectl rollout status)
-        ├─ Check Pods / Services are healthy
-        └─ Backend API health check (curl/HTTP probe)
-        ▼
-   K3s Cluster
-        ├─ Frontend Deployment + Service  → exposed via Traefik Ingress
-        └─ Backend Deployment + Service   → internal ClusterIP
-```
+│ (GitHub webhook trigger on push to main)
+▼
+Jenkins Pipeline
+│
+├─ Checkout source
+├─ Build Docker images (frontend, backend)
+├─ Tag images with Jenkins BUILD_NUMBER
+├─ Push images to Docker Hub
+├─ helm upgrade --install (kubeconfig credential)
+├─ Verify rollout status (kubectl rollout status)
+├─ Auto-rollback on failed rollout (kubectl rollout undo)
+├─ Check Pods / Services are healthy
+└─ Backend API health check (curl/HTTP probe)
+▼
+K3s Cluster
+├─ Frontend Deployment + Service → exposed via Traefik Ingress
+└─ Backend Deployment + Service → internal ClusterIP
+
 
 ## Tech Stack
 
-| Layer            | Tool/Tech                          |
-|-------------------|-------------------------------------|
-| Source control     | GitHub                              |
-| CI/CD orchestration | Jenkins (declarative pipeline)     |
-| Containerization   | Docker                              |
-| Image registry     | Docker Hub                          |
-| Orchestration      | Kubernetes (K3s)                    |
-| Deployment tooling  | Helm 3                              |
-| Ingress/routing    | Traefik                             |
+| Layer               | Tool/Tech                                |
+| ------------------- | ----------------------------------------- |
+| Source control      | GitHub                                   |
+| CI/CD orchestration | Jenkins (declarative pipeline)           |
+| Containerization    | Docker                                   |
+| Image registry      | Docker Hub                               |
+| Orchestration       | Kubernetes (K3s)                         |
+| Deployment tooling  | Helm 3                                   |
+| Ingress/routing     | Traefik                                  |
 | Cluster access      | Jenkins Kubernetes/kubeconfig credential |
 
 ## Repository Structure
 
-```
 .
 ├── frontend/
-│   ├── Dockerfile
-│   └── src/
+│ ├── Dockerfile
+│ └── src/
 ├── backend/
-│   ├── Dockerfile
-│   └── src/
+│ ├── Dockerfile
+│ └── src/
 ├── helm/
-│   └── app-chart/
-│       ├── Chart.yaml
-│       ├── values.yaml
-│       └── templates/
-│           ├── frontend-deployment.yaml
-│           ├── frontend-service.yaml
-│           ├── backend-deployment.yaml
-│           ├── backend-service.yaml
-│           └── ingress.yaml
+│ └── app-chart/
+│ ├── Chart.yaml
+│ ├── values.yaml
+│ └── templates/
+│ ├── frontend-deployment.yaml
+│ ├── frontend-service.yaml
+│ ├── backend-deployment.yaml
+│ ├── backend-service.yaml
+│ └── ingress.yaml
 ├── Jenkinsfile
 └── README.md
-```
+
 
 ## Pipeline Stages (Jenkinsfile)
 
@@ -74,7 +72,18 @@ GitHub Repo (source + Dockerfiles + Helm chart)
 3. **Tag & Push** — tags images with `${BUILD_NUMBER}` and pushes to Docker Hub
 4. **Deploy** — runs `helm upgrade --install` against the K3s cluster using a Jenkins-stored kubeconfig credential, pinning the exact image tags built in this run
 5. **Verify Rollout** — `kubectl rollout status` on both deployments; fails the pipeline on rollout failure
-6. **Post-deploy Health Check** — hits the backend `/health` (or equivalent) endpoint to confirm the API is serving traffic
+6. **Auto-Rollback** — if rollout verification fails (bad image, crash loop, failed probe), the pipeline automatically runs `kubectl rollout undo` on both deployments and fails the build loudly instead of leaving a broken release running
+7. **Post-deploy Health Check** — hits the backend `/health` (or equivalent) endpoint to confirm the API is serving traffic
+
+## Reliability
+
+- **Resource requests/limits** set on both frontend and backend containers to prevent noisy-neighbor resource contention on the K3s node.
+- **Liveness probes** restart a container if the app hangs or deadlocks.
+- **Readiness probes** ensure Kubernetes only routes traffic to pods that have passed their health check, avoiding requests hitting a pod still starting up.
+
+## Trigger
+
+Pipeline runs automatically on every push to `main` via a GitHub webhook configured against the Jenkins job (`/github-webhook/` endpoint). Manual trigger via "Build Now" is still available for testing.
 
 ## Prerequisites
 
@@ -84,6 +93,7 @@ GitHub Repo (source + Dockerfiles + Helm chart)
   - Docker Hub username/password (or token)
   - Kubeconfig for the target cluster
 - Traefik installed on the cluster (default with K3s)
+- GitHub webhook configured against the Jenkins job for automatic triggering
 
 ## Setup / Run Locally
 
@@ -106,14 +116,11 @@ kubectl get svc
 kubectl get ingress
 ```
 
-Trigger the full pipeline by running the Jenkins job (manual trigger currently;
-webhook-based auto-trigger is a planned enhancement — see below).
+The full pipeline triggers automatically on push to `main` (see Trigger section above). Manual trigger via Jenkins "Build Now" remains available for local testing.
 
 ## Key Design Decisions
 
-- **Immutable image tags** (`BUILD_NUMBER`) instead of `latest`, so every
-  deployment is traceable back to an exact Jenkins build and Git commit.
-- **Helm over raw manifests** for parameterized, repeatable deploys across
-  environments.
-- **Rollout verification as a pipeline gate** — the pipeline fails loudly if
-  `kubectl rollout status` doesn't succeed, instead of reporting false-green.
+- **Immutable image tags** (`BUILD_NUMBER`) instead of `latest`, so every deployment is traceable back to an exact Jenkins build and Git commit.
+- **Helm over raw manifests** for parameterized, repeatable deploys across environments.
+- **Rollout verification as a pipeline gate** — the pipeline fails loudly if `kubectl rollout status` doesn't succeed, instead of reporting false-green.
+- **Auto-rollback on failure** — a bad deploy self-heals to the last known-good release instead of requiring manual intervention.
